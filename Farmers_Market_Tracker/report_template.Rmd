@@ -1,0 +1,50 @@
+---
+title: "Weekly Bakery Sales Report"
+output: pdf_document
+params:
+  summary_data: NULL
+  sales_data: NULL
+  weekly_plot: NULL
+  margin_plot: NULL
+  top_items_plot: NULL
+  monthly_trend_plot: NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(dplyr)
+library(ggplot2)
+
+knitr::kable(params$summary_data, digits = 2, caption = "Revenue, Cost, and Net Profit by Week")
+
+params$weekly_plot
+
+category_summary <- params$sales_data %>%
+  mutate(
+    revenue = price * quantity,
+    profit = (price - cost) * quantity,
+    margin_pct = ifelse(price > 0, (price - cost) / price * 100, NA)
+  ) %>%
+  group_by(item_category) %>%
+  summarise(
+    total_revenue = sum(revenue),
+    total_quantity = sum(quantity),
+    avg_margin_pct = mean(margin_pct, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+knitr::kable(category_summary, digits = 2, caption = "Summary by Item Category")
+
+params$margin_plot
+
+params$top_items_plot
+
+params$monthly_trend_plot
+
+knitr::kable(
+  params$sales_data %>%
+    select(week, item, item_category, quantity, price, cost),
+  digits = 2,
+  caption = "Raw Sales Records (with Item Categories)"
+)
+```
