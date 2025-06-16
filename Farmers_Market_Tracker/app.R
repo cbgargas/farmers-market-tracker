@@ -136,24 +136,21 @@ ui <- fluidPage(
 		)
 	),
 	tags$script(HTML("
-  Shiny.addCustomMessageHandler('bindDeleteSales', function(message) {
-    $('.delete_btn').off('click').on('click', function() {
-      var id = $(this).data('id');
-      if (confirm('Are you sure you want to delete this sales entry?')) {
-        Shiny.setInputValue('delete_sale_id', id, {priority: 'event'});
-      }
-    });
+  $(document).on('click', '.delete_btn', function() {
+    var id = $(this).data('id');
+    console.log('Clicked delete with id:', id); // debug
+    if (confirm('Are you sure you want to delete this sales entry?')) {
+      Shiny.setInputValue('delete_sale_id', id, {priority: 'event'});
+    }
   });
-
-  Shiny.addCustomMessageHandler('bindDeleteCosts', function(message) {
-    $('.delete_cost_btn').off('click').on('click', function() {
-      var id = $(this).data('id');
-      if (confirm('Are you sure you want to delete this fixed cost entry?')) {
-        Shiny.setInputValue('delete_cost_id', id, {priority: 'event'});
-      }
-    });
+  $(document).on('click', '.delete_cost_btn', function() {
+    var id = $(this).data('id');
+    if (confirm('Are you sure you want to delete this fixed cost entry?')) {
+      Shiny.setInputValue('delete_cost_id', id, {priority: 'event'});
+    }
   });
 "))
+	
 	
 	
 	
@@ -197,12 +194,15 @@ server <- function(input, output, session) {
 	output$sales_table <- renderDT({
 		df <- filteredData()
 		df$Delete <- sprintf('<button class="btn btn-danger btn-sm delete_btn" data-id="%s">Delete</button>', df$id)
-		# Render DataTable
+		
+		# Render the table
 		dt <- datatable(df, escape = FALSE, editable = TRUE, rownames = FALSE,
 										options = list(scrollX = TRUE, scrollY = "400px", paging = FALSE))
-		# Trigger the binding of delete buttons
+		
+		# Send the custom message to bind delete buttons
 		session$sendCustomMessage(type = "bindDeleteSales", message = list())
-		dt
+		
+		return(dt)
 	})
 	
 	observeEvent(input$sales_table_cell_edit, {
@@ -296,12 +296,15 @@ server <- function(input, output, session) {
 	output$fixed_costs_table <- renderDT({
 		df <- loadFixedCosts()
 		df$Delete <- sprintf('<button class="btn btn-danger btn-sm delete_cost_btn" data-id="%s">Delete</button>', df$id)
-		# Render DataTable
+		
+		# Render the table
 		dt <- datatable(df, escape = FALSE, editable = TRUE, rownames = FALSE,
 										options = list(scrollX = TRUE, scrollY = "400px", paging = FALSE))
-		# Trigger the binding of delete buttons
+		
+		# Send the custom message to bind delete buttons
 		session$sendCustomMessage(type = "bindDeleteCosts", message = list())
-		dt
+		
+		return(dt)
 	})
 	
 	observeEvent(input$delete_cost_id, {
@@ -329,6 +332,7 @@ server <- function(input, output, session) {
 	})
 	
 	observeEvent(input$delete_sale_id, {
+		print(paste("Deleting sale with id:", input$delete_sale_id))
 		dbExecute(con, "DELETE FROM sales WHERE id = ?", params = list(input$delete_sale_id))
 		df <- dbReadTable(con, "sales")
 		df <- updateSalesData(df)
@@ -339,10 +343,9 @@ server <- function(input, output, session) {
 		session$sendCustomMessage(type = "bindDeleteSales", message = list())
 		session$sendCustomMessage(type = "bindDeleteCosts", message = list())
 	})
+
 	
 }
 
 
-
 shinyApp(ui = ui, server = server)
-
