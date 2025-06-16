@@ -45,20 +45,23 @@ CREATE TABLE IF NOT EXISTS fixed_costs (
 updateSalesData <- function(df) {
 	df <- df %>%
 		mutate(
-			qty_difference = qty_projected - qty_actual,
+			qty_difference = qty_actual - qty_projected,
+			qty_remaining = qty_actual - qty_sold,
 			rev_projected = qty_projected * price,
 			rev_actual = qty_actual * price,
-			rev_difference = rev_projected - rev_actual
+			rev_difference = rev_actual - rev_projected
 		)
 	for (i in 1:nrow(df)) {
 		dbExecute(con, "UPDATE sales SET 
       qty_difference = ?, 
+      qty_remaining = ?,
       rev_projected = ?, 
       rev_actual = ?, 
       rev_difference = ? 
       WHERE id = ?",
 							params = list(
 								df$qty_difference[i],
+								df$qty_remaining[i],
 								df$rev_projected[i],
 								df$rev_actual[i],
 								df$rev_difference[i],
@@ -76,13 +79,12 @@ ui <- fluidPage(
 		tabPanel("Quick Entry",
 						 sidebarLayout(
 						 	sidebarPanel(
-						 		dateInput("week", "Week", value = Sys.Date(), format = "yyyy-mm-dd"),
+						 		textInput("week", "Week", value = "YYYY-MM-DD"),
 						 		textInput("item", "Item Name", value = ""),
 						 		selectInput("type", "Type", choices = c("Sourdough Loaf", "Sourdough Bagel", "Challah", "Focaccia", "Popover")),
 						 		numericInput("qty_projected", "Quantity - Projected", 0),
 						 		numericInput("qty_actual", "Quantity - Actual", 0),
 						 		numericInput("qty_sold", "Quantity - Sold", 0),
-						 		numericInput("qty_remaining", "Quantity - Remaining", 0),
 						 		numericInput("price", "Price", 0, step = 0.01),
 						 		numericInput("material_cost", "Material Cost", 0, step = 0.01),
 						 		textInput("notes", "Notes", ""),
@@ -123,7 +125,6 @@ ui <- fluidPage(
 						 	sidebarPanel(
 						 		dateInput("cost_week", "Week", value = Sys.Date(), format = "yyyy-mm-dd"),
 						 		numericInput("rent", "Rent", 0, step = 0.01),
-						 		# numericInput("market_fee", "Market Fee", 0, step = 0.01),
 						 		numericInput("labor", "Labor", 0, step = 0.01),
 						 		actionButton("submit_cost_entry", "Submit Fixed Cost Entry"),
 						 		actionButton("add_cost_row", "Add Cost Entry")
@@ -133,7 +134,29 @@ ui <- fluidPage(
 						 	)
 						 )
 		)
-	)
+	),
+	tags$script(HTML("
+  Shiny.addCustomMessageHandler('bindDeleteSales', function(message) {
+    $('.delete_btn').off('click').on('click', function() {
+      var id = $(this).data('id');
+      if (confirm('Are you sure you want to delete this sales entry?')) {
+        Shiny.setInputValue('delete_sale_id', id, {priority: 'event'});
+      }
+    });
+  });
+
+  Shiny.addCustomMessageHandler('bindDeleteCosts', function(message) {
+    $('.delete_cost_btn').off('click').on('click', function() {
+      var id = $(this).data('id');
+      if (confirm('Are you sure you want to delete this fixed cost entry?')) {
+        Shiny.setInputValue('delete_cost_id', id, {priority: 'event'});
+      }
+    });
+  });
+"))
+	
+	
+	
 )
 
 # Server
@@ -172,10 +195,15 @@ server <- function(input, output, session) {
 	})
 	
 	output$sales_table <- renderDT({
-		datatable(filteredData(), editable = TRUE, rownames = FALSE, options = list(scrollX = TRUE, scrollY = "400px", paging = FALSE)
-)
+		df <- filteredData()
+		df$Delete <- sprintf('<button class="btn btn-danger btn-sm delete_btn" data-id="%s">Delete</button>', df$id)
+		# Render DataTable
+		dt <- datatable(df, escape = FALSE, editable = TRUE, rownames = FALSE,
+										options = list(scrollX = TRUE, scrollY = "400px", paging = FALSE))
+		# Trigger the binding of delete buttons
+		session$sendCustomMessage(type = "bindDeleteSales", message = list())
+		dt
 	})
-	
 	
 	observeEvent(input$sales_table_cell_edit, {
 		info <- input$sales_table_cell_edit
@@ -204,7 +232,7 @@ server <- function(input, output, session) {
 		dbExecute(con, "INSERT INTO sales (
                 week, item, type, qty_projected, qty_actual, qty_difference,
                 qty_sold, qty_remaining, price, material_cost, rev_projected, rev_actual, rev_difference, notes
-               ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0, 0, 0, ?)",
+               ) VALUES (?, ?, ?, ?, ?, 0, ?, 0, ?, ?, 0, 0, 0, ?)",
 							params = list(
 								input$week,
 								input$item,
@@ -212,7 +240,6 @@ server <- function(input, output, session) {
 								input$qty_projected,
 								input$qty_actual,
 								input$qty_sold,
-								input$qty_remaining,
 								input$price,
 								input$material_cost,
 								input$notes
@@ -223,11 +250,10 @@ server <- function(input, output, session) {
 	})
 	
 	observeEvent(input$submit_cost_entry, {
-		# Get total revenue for the selected week
 		df <- dbReadTable(con, "sales")
 		week_df <- df[df$week == as.character(input$cost_week), ]
 		total_rev <- sum(week_df$rev_actual, na.rm = TRUE)
-		calc_market_fee <- total_rev * 0.0005  # 0.05%
+		calc_market_fee <- total_rev * 0.0005
 		
 		dbExecute(con, "INSERT INTO fixed_costs (week, rent, market_fee, labor) VALUES (?, ?, ?, ?)",
 							params = list(
@@ -239,11 +265,9 @@ server <- function(input, output, session) {
 		loadFixedCosts(dbReadTable(con, "fixed_costs"))
 	})
 	
-	
 	output$recent_entries <- renderDT({
-		datatable(loadSalesData(), options = list(scrollX = TRUE, scrollY = "400px", paging = FALSE))
+		datatable(loadSalesData(), options = list(pageLength = 5, scrollX = TRUE, scrollY = "400px"))
 	})
-	
 	
 	output$download_sales <- downloadHandler(
 		filename = function() {
@@ -270,9 +294,20 @@ server <- function(input, output, session) {
 	})
 	
 	output$fixed_costs_table <- renderDT({
-		datatable(loadFixedCosts(), editable = TRUE, rownames = FALSE, options = list(scrollX = TRUE, scrollY = "400px", paging = FALSE))
+		df <- loadFixedCosts()
+		df$Delete <- sprintf('<button class="btn btn-danger btn-sm delete_cost_btn" data-id="%s">Delete</button>', df$id)
+		# Render DataTable
+		dt <- datatable(df, escape = FALSE, editable = TRUE, rownames = FALSE,
+										options = list(scrollX = TRUE, scrollY = "400px", paging = FALSE))
+		# Trigger the binding of delete buttons
+		session$sendCustomMessage(type = "bindDeleteCosts", message = list())
+		dt
 	})
 	
+	observeEvent(input$delete_cost_id, {
+		dbExecute(con, "DELETE FROM fixed_costs WHERE id = ?", params = list(input$delete_cost_id))
+		loadFixedCosts(dbReadTable(con, "fixed_costs"))
+	})
 	
 	observeEvent(input$fixed_costs_table_cell_edit, {
 		info <- input$fixed_costs_table_cell_edit
@@ -292,6 +327,22 @@ server <- function(input, output, session) {
 		dbExecute(con, "INSERT INTO fixed_costs (week, rent, market_fee, labor) VALUES ('', 0.0, ?, 0.0)", params = list(market_fee))
 		loadFixedCosts(dbReadTable(con, "fixed_costs"))
 	})
+	
+	observeEvent(input$delete_sale_id, {
+		dbExecute(con, "DELETE FROM sales WHERE id = ?", params = list(input$delete_sale_id))
+		df <- dbReadTable(con, "sales")
+		df <- updateSalesData(df)
+		loadSalesData(df)
+	})
+	
+	observe({
+		session$sendCustomMessage(type = "bindDeleteSales", message = list())
+		session$sendCustomMessage(type = "bindDeleteCosts", message = list())
+	})
+	
 }
 
+
+
 shinyApp(ui = ui, server = server)
+
