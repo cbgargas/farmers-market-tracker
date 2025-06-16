@@ -172,8 +172,10 @@ server <- function(input, output, session) {
 	})
 	
 	output$sales_table <- renderDT({
-		datatable(filteredData(), editable = TRUE, rownames = FALSE)
+		datatable(filteredData(), editable = TRUE, rownames = FALSE, options = list(scrollX = TRUE, scrollY = "400px", paging = FALSE)
+)
 	})
+	
 	
 	observeEvent(input$sales_table_cell_edit, {
 		info <- input$sales_table_cell_edit
@@ -239,8 +241,9 @@ server <- function(input, output, session) {
 	
 	
 	output$recent_entries <- renderDT({
-		datatable(loadSalesData(), options = list(pageLength = 5))
+		datatable(loadSalesData(), options = list(scrollX = TRUE, scrollY = "400px", paging = FALSE))
 	})
+	
 	
 	output$download_sales <- downloadHandler(
 		filename = function() {
@@ -267,8 +270,9 @@ server <- function(input, output, session) {
 	})
 	
 	output$fixed_costs_table <- renderDT({
-		datatable(loadFixedCosts(), editable = TRUE, rownames = FALSE)
+		datatable(loadFixedCosts(), editable = TRUE, rownames = FALSE, options = list(scrollX = TRUE, scrollY = "400px", paging = FALSE))
 	})
+	
 	
 	observeEvent(input$fixed_costs_table_cell_edit, {
 		info <- input$fixed_costs_table_cell_edit
