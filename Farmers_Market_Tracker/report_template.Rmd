@@ -1,13 +1,11 @@
 ---
-title: "Weekly Bakery Sales Report"
+title: "Bakery Weekly Report"
 output: pdf_document
 params:
-  summary_data: NULL
   sales_data: NULL
-  weekly_plot: NULL
-  margin_plot: NULL
-  top_items_plot: NULL
-  monthly_trend_plot: NULL
+  fixed_costs: NULL
+  start_date: NULL
+  end_date: NULL
 ---
 
 ```{r setup, include=FALSE}
@@ -15,36 +13,95 @@ knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 library(dplyr)
 library(ggplot2)
 
-knitr::kable(params$summary_data, digits = 2, caption = "Revenue, Cost, and Net Profit by Week")
+```
 
-params$weekly_plot
-
-category_summary <- params$sales_data %>%
-  mutate(
-    revenue = price * quantity,
-    profit = (price - cost) * quantity,
-    margin_pct = ifelse(price > 0, (price - cost) / price * 100, NA)
-  ) %>%
-  group_by(item_category) %>%
+```{r}
+sales_summary <- params$sales_data %>%
+  group_by(week) %>%
   summarise(
-    total_revenue = sum(revenue),
-    total_quantity = sum(quantity),
-    avg_margin_pct = mean(margin_pct, na.rm = TRUE),
+    Total_Revenue = sum(rev_actual, na.rm = TRUE),
+    Quantity_Sold = sum(qty_sold, na.rm = TRUE),
     .groups = "drop"
   )
+knitr::kable(sales_summary)
 
-knitr::kable(category_summary, digits = 2, caption = "Summary by Item Category")
-
-params$margin_plot
-
-params$top_items_plot
-
-params$monthly_trend_plot
-
-knitr::kable(
-  params$sales_data %>%
-    select(week, item, item_category, quantity, price, cost),
-  digits = 2,
-  caption = "Raw Sales Records (with Item Categories)"
-)
 ```
+
+```{r}
+ggplot(sales_summary, aes(x = week, y = Total_Revenue)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Actual Revenue by Week", x = "Week", y = "Revenue") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+fixed_summary <- params$fixed_costs %>%
+  group_by(week) %>%
+  summarise(
+    Rent = sum(rent, na.rm = TRUE),
+    Labor = sum(labor, na.rm = TRUE),
+    Market_Fee = sum(market_fee, na.rm = TRUE),
+    .groups = "drop"
+  )
+knitr::kable(fixed_summary)
+
+
+
+```
+
+```{r}
+fixed_long <- tidyr::pivot_longer(fixed_summary, cols = c(Rent, Labor, Market_Fee), names_to = "CostType", values_to = "Amount")
+
+ggplot(fixed_long, aes(x = week, y = Amount, fill = CostType)) +
+  geom_col(position = "stack") +
+  labs(title = "Fixed Cost Breakdown by Week", x = "Week", y = "Amount") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+```{r}
+profit_df <- left_join(sales_summary, fixed_summary, by = "week") %>%
+  mutate(
+    Total_Costs = Rent + Labor + Market_Fee,
+    Net_Profit = Total_Revenue - Total_Costs
+  )
+knitr::kable(profit_df)
+```
+
+```{r}
+ggplot(profit_df, aes(x = week, y = Net_Profit)) +
+  geom_line(group = 1, color = "darkgreen", size = 1.2) +
+  geom_point(color = "darkgreen", size = 2) +
+  labs(title = "Net Profit Over Time", x = "Week", y = "Net Profit") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+sales_summary <- params$sales_data %>%
+  group_by(week) %>%
+  summarise(
+    Total_Revenue = sum(rev_actual, na.rm = TRUE),
+    Quantity_Sold = sum(qty_sold, na.rm = TRUE),
+    .groups = "drop"
+  )
+knitr::kable(sales_summary)
+
+```
+
+```{r}
+
+profit_df <- left_join(sales_summary, fixed_summary, by = "week") %>%
+  mutate(
+    Total_Costs = Rent + Labor + Market_Fee,
+    Net_Profit = Total_Revenue - Total_Costs
+  )
+knitr::kable(profit_df)
+
+```
+

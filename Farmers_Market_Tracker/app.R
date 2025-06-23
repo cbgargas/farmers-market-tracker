@@ -5,6 +5,7 @@ library(DBI)
 library(RSQLite)
 library(dplyr)
 library(ggplot2)
+library(viridis)
 
 # Connect to SQLite database
 con <- dbConnect(RSQLite::SQLite(), "bakery.db")
@@ -35,9 +36,9 @@ dbExecute(con, "
 CREATE TABLE IF NOT EXISTS fixed_costs (
   id INTEGER PRIMARY KEY,
   week TEXT,
-  rent REAL,
-  market_fee REAL,
-  labor REAL
+  rent INTEGER,
+  market_fee INTEGER,
+  labor INTEGER
 )
 ")
 
@@ -47,8 +48,8 @@ updateSalesData <- function(df) {
 		mutate(
 			qty_difference = qty_actual - qty_projected,
 			qty_remaining = qty_actual - qty_sold,
-			rev_projected = qty_projected * price,
-			rev_actual = qty_actual * price,
+			rev_projected = qty_actual * price,
+			rev_actual = qty_sold * price,
 			rev_difference = rev_actual - rev_projected
 		)
 	for (i in 1:nrow(df)) {
@@ -79,8 +80,8 @@ ui <- fluidPage(
 		tabPanel("Quick Entry",
 						 sidebarLayout(
 						 	sidebarPanel(
-						 		textInput("week", "Week", value = "YYYY-MM-DD"),
-						 		textInput("item", "Item Name", value = ""),
+						 		dateInput("week", "Week", value = Sys.Date(), format = "yyyy-mm-dd"),
+						 		selectizeInput("item", "Item Name", choices = NULL, selected = NULL, options = list(create = TRUE)),
 						 		selectInput("type", "Type", choices = c("Sourdough Loaf", "Sourdough Bagel", "Challah", "Focaccia", "Popover")),
 						 		numericInput("qty_projected", "Quantity - Projected", 0),
 						 		numericInput("qty_actual", "Quantity - Actual", 0),
@@ -101,10 +102,34 @@ ui <- fluidPage(
 						 		selectInput("filter_week", "Filter by Week:", choices = NULL, selected = NULL),
 						 		selectInput("filter_type", "Filter by Type:", choices = NULL, selected = NULL),
 						 		actionButton("add_row", "Add New Row"),
-						 		downloadButton("download_sales", "Download CSV")
+						 		downloadButton("download_sales", "Download Sales CSV"),  # Already there
+						 		downloadButton("download_fixed_costs", "Download Fixed Costs CSV"),
+						 		downloadButton("download_combined_report", "Download Weekly Summary"),
+						 		tags$h4("Export Reports"),
+						 		downloadButton("download_sales", "Sales Data"),
+						 		downloadButton("download_fixed_costs", "Fixed Costs"),
+						 		downloadButton("download_combined_report", "Summary Report"),
+						 		dateRangeInput("report_range", "Select Date Range:",
+						 									 start = Sys.Date() - 30, end = Sys.Date(),
+						 									 format = "yyyy-mm-dd"),
+						 		downloadButton("download_pdf_report", "Download PDF Report")
+						 		
+						 		
 						 	),
 						 	mainPanel(
 						 		DTOutput("sales_table")
+						 	)
+						 )
+		),
+		tabPanel("Weekly Summary",
+						 sidebarLayout(
+						 	sidebarPanel(
+						 		dateRangeInput("summary_range", "Date Range:",
+						 									 start = Sys.Date() - 30, end = Sys.Date(),
+						 									 format = "yyyy-mm-dd")
+						 	),
+						 	mainPanel(
+						 		DTOutput("weekly_summary_table")
 						 	)
 						 )
 		),
@@ -113,7 +138,8 @@ ui <- fluidPage(
 						 	sidebarPanel(
 						 		selectInput("viz_metric", "Metric:", choices = c("rev_actual", "rev_projected", "rev_difference")),
 						 		selectInput("viz_week", "Filter Week:", choices = NULL, selected = NULL),
-						 		selectInput("viz_type", "Filter Type:", choices = NULL, selected = NULL)
+						 		selectInput("viz_type", "Filter Type:", choices = NULL, selected = NULL),
+						 		checkboxInput("facet_by_item", "Facet by Item", value = FALSE)
 						 	),
 						 	mainPanel(
 						 		plotOutput("sales_plot")
@@ -123,10 +149,10 @@ ui <- fluidPage(
 		tabPanel("Fixed Costs",
 						 sidebarLayout(
 						 	sidebarPanel(
-						 		dateInput("cost_week", "Week", value = Sys.Date(), format = "yyyy-mm-dd"),
-						 		numericInput("rent", "Rent", 0, step = 0.01),
-						 		numericInput("labor", "Labor", 0, step = 0.01),
-						 		actionButton("submit_cost_entry", "Submit Fixed Cost Entry"),
+						 		dateInput("week", "Week", value = Sys.Date(), format = "yyyy-mm-dd"),
+						 		numericInput("rent", "Rent", 0),
+						 		numericInput("labor", "Labor", 0),
+						 		# actionButton("submit_cost_entry", "Submit Fixed Cost Entry"),
 						 		actionButton("add_cost_row", "Add Cost Entry")
 						 	),
 						 	mainPanel(
@@ -178,6 +204,14 @@ server <- function(input, output, session) {
 		updateSelectInput(session, "filter_type", choices = c("All", unique(df$type)), selected = "All")
 		updateSelectInput(session, "viz_week", choices = c("All", unique(df$week)), selected = "All")
 		updateSelectInput(session, "viz_type", choices = c("All", unique(df$type)), selected = "All")
+		item_names <- unique(dbGetQuery(con, "SELECT DISTINCT item FROM sales")$item)
+		updateSelectizeInput(session, "item", choices = item_names, server = TRUE)
+		
+	})
+	
+	observe({
+		item_names <- unique(dbGetQuery(con, "SELECT DISTINCT item FROM sales")$item)
+		updateSelectizeInput(session, "item", choices = item_names, server = TRUE)
 	})
 	
 	filteredData <- reactive({
@@ -234,7 +268,7 @@ server <- function(input, output, session) {
                 qty_sold, qty_remaining, price, material_cost, rev_projected, rev_actual, rev_difference, notes
                ) VALUES (?, ?, ?, ?, ?, 0, ?, 0, ?, ?, 0, 0, 0, ?)",
 							params = list(
-								input$week,
+								as.character(input$week), # SQLite doesn't like dates, so convert to character
 								input$item,
 								input$type,
 								input$qty_projected,
@@ -249,21 +283,45 @@ server <- function(input, output, session) {
 		loadSalesData(df)
 	})
 	
-	observeEvent(input$submit_cost_entry, {
-		df <- dbReadTable(con, "sales")
-		week_df <- df[df$week == as.character(input$cost_week), ]
-		total_rev <- sum(week_df$rev_actual, na.rm = TRUE)
-		calc_market_fee <- total_rev * 0.0005
+	output$weekly_summary_table <- renderDT({
+		sales <- loadSalesData()
+		costs <- loadFixedCosts()
 		
-		dbExecute(con, "INSERT INTO fixed_costs (week, rent, market_fee, labor) VALUES (?, ?, ?, ?)",
-							params = list(
-								input$cost_week,
-								input$rent,
-								calc_market_fee,
-								input$labor
-							))
-		loadFixedCosts(dbReadTable(con, "fixed_costs"))
+		filtered_sales <- sales %>%
+			filter(as.Date(week) >= input$summary_range[1],
+						 as.Date(week) <= input$summary_range[2]) %>%
+			mutate(total_material_cost = material_cost)
+		
+		filtered_costs <- costs %>%
+			filter(as.Date(week) >= input$summary_range[1],
+						 as.Date(week) <= input$summary_range[2])
+		
+		summary <- filtered_sales %>%
+			group_by(week) %>%
+			summarise(
+				total_rev_actual = sum(rev_actual, na.rm = TRUE),
+				total_rev_projected = sum(rev_projected, na.rm = TRUE),
+				total_rev_difference = sum(rev_difference, na.rm = TRUE),
+				total_qty_sold = sum(qty_sold, na.rm = TRUE),
+				total_material_cost = sum(total_material_cost, na.rm = TRUE),
+				.groups = 'drop'
+			) %>%
+			left_join(filtered_costs %>%
+									group_by(week) %>%
+									summarise(
+										total_rent = sum(rent, na.rm = TRUE),
+										total_labor = sum(labor, na.rm = TRUE),
+										total_market_fee = sum(market_fee, na.rm = TRUE),
+										.groups = 'drop'),
+								by = "week") %>%
+			mutate(
+				total_cost = total_rent + total_labor + total_market_fee + total_material_cost,
+				net_profit = total_rev_actual - total_cost
+			)
+		
+		datatable(summary, options = list(scrollX = TRUE, pageLength = 10))
 	})
+	
 	
 	output$recent_entries <- renderDT({
 		datatable(loadSalesData(), options = list(pageLength = 5, scrollX = TRUE, scrollY = "400px"))
@@ -287,11 +345,20 @@ server <- function(input, output, session) {
 			df <- df[df$type == input$viz_type, ]
 		}
 		if (nrow(df) == 0) return(NULL)
-		ggplot(df, aes(x = week, y = .data[[input$viz_metric]], fill = type)) +
+		
+		p <- ggplot(df, aes(x = week, y = .data[[input$viz_metric]], fill = type)) +
 			geom_bar(stat = "identity", position = "dodge") +
 			labs(title = paste("Weekly", input$viz_metric), x = "Week", y = input$viz_metric) +
+			scale_fill_viridis(discrete = TRUE) +
 			theme_minimal()
+		
+		if (input$facet_by_item) {
+			p <- p + facet_wrap(~ item, scales = "free_y")
+		}
+		
+		p
 	})
+	
 	
 	output$fixed_costs_table <- renderDT({
 		df <- loadFixedCosts()
@@ -324,12 +391,27 @@ server <- function(input, output, session) {
 	})
 	
 	observeEvent(input$add_cost_row, {
+		week_selected <- as.character(input$week ) # get the input from the UI, convert to character to satisft SQLite
 		df <- loadSalesData()
-		total_revenue <- sum(df$rev_actual, na.rm = TRUE)
-		market_fee <- total_revenue * 0.0005
-		dbExecute(con, "INSERT INTO fixed_costs (week, rent, market_fee, labor) VALUES ('', 0.0, ?, 0.0)", params = list(market_fee))
+		
+		# Filter by selected week
+		week_df <- df[df$week == week_selected, ]
+		week_revenue <- sum(week_df$rev_actual, na.rm = TRUE)
+		
+		market_fee <- week_revenue * 0.05
+		
+		dbExecute(con, "INSERT INTO fixed_costs (week, rent, market_fee, labor) VALUES (?, ?, ?, ?)",
+							params = list(
+								week_selected,
+								input$rent,
+								market_fee,
+								input$labor
+							))
+		
 		loadFixedCosts(dbReadTable(con, "fixed_costs"))
 	})
+	
+	
 	
 	observeEvent(input$delete_sale_id, {
 		print(paste("Deleting sale with id:", input$delete_sale_id))
@@ -344,6 +426,94 @@ server <- function(input, output, session) {
 		session$sendCustomMessage(type = "bindDeleteCosts", message = list())
 	})
 
+	# Download Sales Data
+	output$download_sales <- downloadHandler(
+		filename = function() {
+			paste0("sales_data_", Sys.Date(), ".csv")
+		},
+		content = function(file) {
+			write.csv(loadSalesData(), file, row.names = FALSE)
+		}
+	)
+	
+	# Download Fixed Costs Data
+	output$download_fixed_costs <- downloadHandler(
+		filename = function() {
+			paste0("fixed_costs_", Sys.Date(), ".csv")
+		},
+		content = function(file) {
+			write.csv(loadFixedCosts(), file, row.names = FALSE)
+		}
+	)
+	
+	# Download Combined Weekly Summary Report
+	output$download_combined_report <- downloadHandler(
+		filename = function() {
+			paste0("weekly_summary_", Sys.Date(), ".csv")
+		},
+		content = function(file) {
+			sales <- loadSalesData()
+			costs <- loadFixedCosts()
+			
+			summary <- sales %>%
+				group_by(week) %>%
+				summarise(
+					total_rev_actual = sum(rev_actual, na.rm = TRUE),
+					total_rev_projected = sum(rev_projected, na.rm = TRUE),
+					total_rev_difference = sum(rev_difference, na.rm = TRUE),
+					total_qty_sold = sum(qty_sold, na.rm = TRUE),
+					.groups = 'drop'
+				) %>%
+				left_join(costs %>%
+										group_by(week) %>%
+										summarise(
+											total_rent = sum(rent, na.rm = TRUE),
+											total_labor = sum(labor, na.rm = TRUE),
+											total_market_fee = sum(market_fee, na.rm = TRUE),
+											.groups = 'drop'),
+									by = "week") %>%
+				mutate(
+					total_cost = total_rent + total_labor + total_market_fee,
+					net_profit = total_rev_actual - total_cost
+				)
+			
+			write.csv(summary, file, row.names = FALSE)
+		}
+	)
+	
+	output$download_pdf_report <- downloadHandler(
+		filename = function() {
+			paste0("Bakery_Report_", Sys.Date(), ".pdf")
+		},
+		content = function(file) {
+			sales <- loadSalesData()
+			costs <- loadFixedCosts()
+			
+			# Filter by selected date range
+			filtered_sales <- sales %>%
+				filter(as.Date(week) >= input$report_range[1],
+							 as.Date(week) <= input$report_range[2])
+			
+			filtered_costs <- costs %>%
+				filter(as.Date(week) >= input$report_range[1],
+							 as.Date(week) <= input$report_range[2])
+			
+			# Temporary file
+			tempReport <- file.path(tempdir(), "report_template.Rmd")
+			file.copy("report_template.Rmd", tempReport, overwrite = TRUE)
+			
+			# Render RMarkdown to PDF
+			rmarkdown::render(tempReport, output_file = file,
+												params = list(
+													sales_data = filtered_sales,
+													fixed_costs = filtered_costs,
+													start_date = input$report_range[1],
+													end_date = input$report_range[2]
+												),
+												envir = new.env(parent = globalenv())
+			)
+		}
+	)
 	
 }
 
