@@ -133,6 +133,20 @@ ui <- fluidPage(
 						 	)
 						 )
 		),
+		tabPanel("Profit & Loss",
+						 sidebarLayout(
+						 	sidebarPanel(
+						 		dateRangeInput("pl_range", "Select Date Range:",
+						 									 start = Sys.Date() - 30, end = Sys.Date(),
+						 									 format = "yyyy-mm-dd"
+						 		)
+						 	),
+						 	mainPanel(
+						 		DTOutput("pl_table"),
+						 		plotOutput("pl_plot")
+						 	)
+						 )
+		),
 		tabPanel("Visualizations",
 						 sidebarLayout(
 						 	sidebarPanel(
@@ -322,6 +336,81 @@ server <- function(input, output, session) {
 		datatable(summary, options = list(scrollX = TRUE, pageLength = 10))
 	})
 	
+	output$pl_table <- renderDT({
+		sales <- loadSalesData()
+		costs <- loadFixedCosts()
+		
+		filtered_sales <- sales %>%
+			filter(as.Date(week) >= input$pl_range[1],
+						 as.Date(week) <= input$pl_range[2]) %>%
+			mutate(material_total = material_cost)
+		
+		filtered_costs <- costs %>%
+			filter(as.Date(week) >= input$pl_range[1],
+						 as.Date(week) <= input$pl_range[2])
+		
+		pl_summary <- filtered_sales %>%
+			group_by(week) %>%
+			summarise(
+				revenue = sum(rev_actual, na.rm = TRUE),
+				material_cost = sum(material_total, na.rm = TRUE),
+				.groups = 'drop'
+			) %>%
+			left_join(
+				filtered_costs %>%
+					group_by(week) %>%
+					summarise(
+						rent = sum(rent, na.rm = TRUE),
+						labor = sum(labor, na.rm = TRUE),
+						market_fee = sum(market_fee, na.rm = TRUE),
+						.groups = 'drop'
+					),
+				by = "week"
+			) %>%
+			mutate(
+				fixed_cost = rent + labor + market_fee,
+				total_cost = fixed_cost + material_cost,
+				net_profit = revenue - total_cost
+			)
+		
+		datatable(pl_summary, options = list(scrollX = TRUE, pageLength = 10))
+	})
+	
+	output$pl_plot <- renderPlot({
+		sales <- loadSalesData()
+		costs <- loadFixedCosts()
+		
+		filtered_sales <- sales %>%
+			filter(as.Date(week) >= input$pl_range[1],
+						 as.Date(week) <= input$pl_range[2]) %>%
+			group_by(week) %>%
+			summarise(revenue = sum(rev_actual, na.rm = TRUE),
+								material_cost = sum(material_cost, na.rm = TRUE),
+								.groups = 'drop')
+		
+		filtered_costs <- costs %>%
+			filter(as.Date(week) >= input$pl_range[1],
+						 as.Date(week) <= input$pl_range[2]) %>%
+			group_by(week) %>%
+			summarise(rent = sum(rent, na.rm = TRUE),
+								labor = sum(labor, na.rm = TRUE),
+								market_fee = sum(market_fee, na.rm = TRUE),
+								.groups = 'drop')
+		
+		plot_data <- left_join(filtered_sales, filtered_costs, by = "week") %>%
+			mutate(
+				fixed_cost = rent + labor + market_fee,
+				total_cost = fixed_cost + material_cost,
+				net_profit = revenue - total_cost
+			)
+		
+		ggplot(plot_data, aes(x = as.Date(week), y = net_profit)) +
+			geom_col(fill = ifelse(plot_data$net_profit >= 0, "#4CAF50", "#F44336")) +
+			labs(title = "Weekly Profit/Loss",
+					 x = "Week", y = "Net Profit") +
+			theme_minimal()
+	})
+	
 	
 	output$recent_entries <- renderDT({
 		datatable(loadSalesData(), options = list(pageLength = 5, scrollX = TRUE, scrollY = "400px"))
@@ -338,6 +427,7 @@ server <- function(input, output, session) {
 	
 	output$sales_plot <- renderPlot({
 		df <- loadSalesData()
+		
 		if (input$viz_week != "All") {
 			df <- df[df$week == input$viz_week, ]
 		}
@@ -346,14 +436,27 @@ server <- function(input, output, session) {
 		}
 		if (nrow(df) == 0) return(NULL)
 		
-		p <- ggplot(df, aes(x = week, y = .data[[input$viz_metric]], fill = type)) +
+		# Set desired order of types
+		type_levels <- c("Sourdough Loaf", "Sourdough Bagel", "Challah", "Focaccia", "Popover")
+		
+		df <- df %>%
+			mutate(
+				type = factor(type, levels = type_levels),
+				item = factor(item),
+				facet_label = interaction(type, item, sep = " - "),
+				facet_label = factor(facet_label, levels = unique(facet_label[order(type, item)]))  # order facets by type first
+			)
+		
+		p <- df %>% 
+			ggplot(aes(x = week, y = .data[[input$viz_metric]], fill = type)) +
 			geom_bar(stat = "identity", position = "dodge") +
 			labs(title = paste("Weekly", input$viz_metric), x = "Week", y = input$viz_metric) +
 			scale_fill_viridis(discrete = TRUE) +
+			geom_hline(yintercept=0, color = "grey", size=2) +
 			theme_minimal()
 		
 		if (input$facet_by_item) {
-			p <- p + facet_wrap(~ item, scales = "free_y")
+			p <- p + facet_wrap(~ facet_label, scales = "free_y")
 		}
 		
 		p
