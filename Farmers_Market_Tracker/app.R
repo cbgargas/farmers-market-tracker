@@ -6,6 +6,7 @@ library(RSQLite)
 library(dplyr)
 library(ggplot2)
 library(viridis)
+library(bslib)
 
 # Connect to SQLite database
 con <- dbConnect(RSQLite::SQLite(), "bakery.db")
@@ -75,6 +76,19 @@ updateSalesData <- function(df) {
 
 # UI
 ui <- fluidPage(
+	theme = bs_theme(version = 5, 
+									 bootswatch = "darkly", 
+									 # bg = '#F6EEE9',
+									 # fg = '#000',
+									 # primary = '#AFABD5',
+									 # secondary = '#2e2245',
+									 # success = '#38471F',
+									 # info = '#0b403e',
+									 # warning = '#d9a89d',
+									 # danger = '#964a31',
+									 # base_font = 'Sans Serif',
+									 # code_font ='Monospace'
+									 ),
 	titlePanel("Bakery Sales Tracker"),
 	tabsetPanel(
 		tabPanel("Quick Entry",
